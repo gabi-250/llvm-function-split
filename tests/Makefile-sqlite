@@ -1,4 +1,8 @@
 CC ?= gclang
+RUNUSER ?= root
+RUNHOST ?= localhost
+RUNDIR ?= /root
+SSHPORT ?= 10085
 .PHONY: all clean
 
 all: $(patsubst %.bc,lib%.so,$(wildcard *.bc)) joined
@@ -7,7 +11,25 @@ clean:
 	rm *.so *.bc joined
 
 joined: _main.bc
-	$(CC) $(CFLAGS) $< -L. $(patsubst %.bc,-l%,$(filter-out _main.bc,$(wildcard *.bc))) -L. -lm -lrt -ldl -lreadline -ltcl8.6 -lz -Wl,-rpath,$(shell pwd) -o joined
-	
+	$(CC) $(CFLAGS) $< -L. $(patsubst %.bc,-l%,$(filter-out _main.bc,$(wildcard *.bc))) -L. -L.. -lm -lrt -ldl -lz -lpthread -ltcl8.6 -Wl,--allow-shlib-undefined,-rpath,$(shell pwd) -o joined
+
 lib%.so: %.bc
 	$(CC) $(CFLAGS) -shared -fPIC $< -o lib$(basename $<).so
+
+copy-exec-tests:
+	# This places `init.tcl` some place where `testfixture` can find it (TODO:
+	# this is just a workaround -- we should be installing libtcl the proper way
+	# instead of copying the missing files manually):
+	# ```
+	#    ./testfixture: Can't find a usable init.tcl in the following directories:
+	#     /usr/local/lib/tcl8.6 /usr/home/gabi/sqlite/lib/tcl8.6
+	#     /usr/home/gabi/lib/tcl8.6 /usr/home/gabi/sqlite/library
+	#     /usr/home/gabi/library /usr/home/gabi/tcl8.6.12/library
+	#     /usr/home/tcl8.6.12/library
+	# ```
+	ssh $(SSH_OPTIONS) -p $(SSHPORT) $(RUNUSER)@$(RUNHOST) "mkdir -p $(RUNDIR)/lib/tcl8.6"
+	scp $(SCP_OPTIONS) -P $(SSHPORT) -r tcl8.6.12/library/init.tcl $(RUNUSER)@$(RUNHOST):$(RUNDIR)/lib/tcl8.6
+	# This sometimes fails part way through (`debug2: channel 0: read failed`)
+	# for unclear reasons, so you may want to uncomment the `|| true`
+	scp $(SCP_OPTIONS) -P $(SSHPORT) -r sqlite $(RUNUSER)@$(RUNHOST):$(RUNDIR)/  || true
+	ssh $(SSH_OPTIONS) -p $(SSHPORT) $(RUNUSER)@$(RUNHOST) "cd $(RUNDIR)/sqlite/build && LD_LIBRARY_PATH=./out-testfixture make quicktest tcltest"
